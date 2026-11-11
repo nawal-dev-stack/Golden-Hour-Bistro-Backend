@@ -7,6 +7,8 @@ dotenv.config();
 
 const app = express();
 const PORT = process.env.PORT || 5000;
+const MONGO_URI = process.env.MONGO_URI || (process.env.VERCEL ? null : "mongodb://localhost:27017/golden-hour-bistro");
+let connectionPromise;
 
 import authRoutes from './routes/auth.js';
 import orderRoutes from './routes/orders.js';
@@ -20,6 +22,38 @@ import reviewRoutes from './routes/reviews.js';
 // Middleware
 app.use(cors());
 app.use(express.json());
+
+const connectToDatabase = async () => {
+  if (mongoose.connection.readyState === 1) return;
+  if (!MONGO_URI) {
+    throw new Error("MONGO_URI must be configured in the deployment environment.");
+  }
+
+  if (!connectionPromise) {
+    connectionPromise = mongoose.connect(MONGO_URI).then(
+      (connection) => {
+        connectionPromise = null;
+        return connection;
+      },
+      (err) => {
+        connectionPromise = null;
+        throw err;
+      }
+    );
+  }
+
+  await connectionPromise;
+};
+
+app.use(async (req, res, next) => {
+  try {
+    await connectToDatabase();
+    next();
+  } catch (err) {
+    console.error("MongoDB connection error:", err.message);
+    res.status(503).json({ message: "Database unavailable. Check the backend database configuration." });
+  }
+});
 
 // Routes
 app.use('/api/auth', authRoutes);
@@ -47,30 +81,10 @@ app.get("/", (req, res) => {
   res.send("Backend server is running!");
 });
 
-// Connect to MongoDB FIRST, then start server
-const MONGO_URI = process.env.MONGO_URI || "mongodb://localhost:27017/golden-hour-bistro";
-
-// Clean URI for logging
-const logUri = MONGO_URI.includes('@') ? MONGO_URI.split('@')[1] : MONGO_URI;
-
-mongoose
-  .connect(MONGO_URI)
-  .then(() => {
-    console.log("-----------------------------------------");
-    console.log("✅ MongoDB connected successfully!");
-    console.log(`🔗 Instance: ${logUri}`);
-    console.log("📦 Active Database: golden-hour-bistro");
-    console.log("👥 Users Collection ready for documents.");
-    console.log("-----------------------------------------");
-    app.listen(PORT, () => {
-      console.log(`🚀 Server is running on http://localhost:${PORT}`);
-    });
-  })
-  .catch((err) => {
-    console.error("❌ MongoDB connection error:", err.message);
-    console.error("Please ensure MongoDB is running locally at: mongodb://localhost:27017/");
-    process.exit(1);
-  });
-
 export default app;
 
+if (!process.env.VERCEL) {
+  app.listen(PORT, () => {
+    console.log(`🚀 Server is running on http://localhost:${PORT}`);
+  });
+}
